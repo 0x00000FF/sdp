@@ -1,4 +1,6 @@
-use std::net::{SocketAddr};
+use std::net::SocketAddr;
+
+use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 
@@ -10,6 +12,8 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
  *    SPA IS RECEIVED FROM WHEN AH/IHs REQUEST THEIR AUTHORIZATION 
  *
  */
+
+ #[derive(Serialize, Deserialize)]
 pub struct SPAMessage {
     client_id      : [u8; 32],
     nonce          : u16,
@@ -27,9 +31,9 @@ const SPA_PREAMBLE_TEXT_SIZE:usize = 8; // SPDSPA<NUL><NUL>
 const SPA_PREAMBLE_MSG_SIZE:usize  = 8; // 8 bytes per each message
 
 const SPA_PREAMBLE_SIZE:usize      = SPA_PREAMBLE_TEXT_SIZE + SPA_PREAMBLE_MSG_SIZE;
-const SPA_PREAMBLE_TEXT:u64        = 0x5350445350410000; // SPDSPA<NUL><NUL>
 
-const SPA_MESSAGE_MIN_SIZE:usize   = size_of::<SPAMessage>();
+const SPA_PREAMBLE_TEXT:u64        = 0x5350445350410000; // SPDSPA<NUL><NUL>
+const SPA_PREAMBLE_TEXT_LE:u64     = 0x0000415053445053; // LITTLE-ENDIAN
 
 const BUF_SIZE: usize              = 1024;
 
@@ -50,15 +54,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn handle_spa(peer: SocketAddr, buff: Vec<u8>) {
-
+    let json = String::from_utf8(buff);
+    
 }
 
-async fn wait_for_spa(mut socket: UdpSocket) {
+async fn wait_for_spa(socket: UdpSocket) {
     let mut buff = [0x00 as u8; BUF_SIZE];
     let mut recv_info: Option<(usize, SocketAddr)> = None;
 
     loop {
         if let Some((size, peer)) = recv_info {
+            // AT LEAST 16 BYTES
             if size < SPA_PREAMBLE_SIZE {
                 println!("debug: received message does not even have preamble {} < {}", size, SPA_PREAMBLE_SIZE);
 
@@ -66,20 +72,20 @@ async fn wait_for_spa(mut socket: UdpSocket) {
                 continue;
             }
 
-            let mut preamble_text = [0x00 as u8; SPA_PREAMBLE_TEXT_SIZE];
-            preamble_text.copy_from_slice(&buff[0..SPA_PREAMBLE_TEXT_SIZE]);
+            // CHECK MAGIC NUMBER (64bits) : SPDSPA 0x00 0x00
+            let preamble_magic_bytes:[u8; 8] = buff[0..SPA_PREAMBLE_TEXT_SIZE].try_into().unwrap();
 
-            if u64::from_be_bytes(preamble_text) != SPA_PREAMBLE_TEXT {
+            if u64::from_le_bytes(preamble_magic_bytes) != SPA_PREAMBLE_TEXT_LE {
                 println!("debug: signature failed!");
 
                 recv_info = None;
                 continue;
             }
 
-            let mut preamble_size = [0x00 as u8; SPA_PREAMBLE_MSG_SIZE];
-            preamble_size.copy_from_slice(&buff[SPA_PREAMBLE_TEXT_SIZE..SPA_PREAMBLE_SIZE]);
-
-            let msg_size = usize::from_le_bytes(preamble_size);
+            // GET SPA MESSAGE SIZE AND CHECK WITH TOTAL RECEIVED SIZE
+            // ASSERT( TOTAL RECEIVED - PREAMBLE SIZE == SPA MESSAGE SIZE IN PREAMBLE )
+            let msg_size_bytes: [u8; 8] = buff[SPA_PREAMBLE_TEXT_SIZE..SPA_PREAMBLE_MSG_SIZE].try_into().unwrap();
+            let msg_size = usize::from_le_bytes(msg_size_bytes);
 
             if msg_size != (size - SPA_PREAMBLE_SIZE) {
                 println!("debug: total message size not valid (in packet: {}, actual: {})", msg_size, size - SPA_PREAMBLE_MSG_SIZE);
@@ -88,9 +94,10 @@ async fn wait_for_spa(mut socket: UdpSocket) {
                 continue;
             }
 
-            let mut spa_body = Vec::new();
-            spa_body.extend_from_slice(&buff[SPA_PREAMBLE_SIZE..]);
+            // GET SPA MESSAGE BUFFER
+            let spa_body = buff[SPA_PREAMBLE_SIZE..msg_size].to_vec();
 
+            // HANDLE SINGLE PACKET AUTHORIZATION
             tokio::spawn(handle_spa(peer, spa_body));
         }
 
