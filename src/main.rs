@@ -18,13 +18,27 @@ pub struct SPAMessage {
     client_id      : String,
     nonce          : u16,
     timestamp      : u64,
-    source         : String,   // Must be 4 bytes or 16 bytes
+    source         : SPASourceIPType,   // Must be 4 bytes or 16 bytes
     
     message_type   : u8,        // SEE MessageType
     message_string : Option<String>,
 
     hotp           : String,
     hmac           : String
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum SPASourceIPType {
+    V4(u8, u8, u8, u8),
+    V6(u16, u16, u16, u16, u16, u16, u16, u16),
+    Unknown
+}
+
+#[derive(PartialEq)]
+pub enum SPASourceIPAuthResultType {
+    Success,
+    ProxiedSuccess,
+    Failed
 }
 
 const SPA_PREAMBLE_TEXT_SIZE:usize = 8; // SPDSPA<NUL><NUL>
@@ -53,12 +67,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+async fn authorize_ipv4(address: [u8; 4]) -> Result<SPASourceIPAuthResultType, ()>
+{
+    Ok(SPASourceIPAuthResultType::Success)
+}
+
+async fn authorize_ipv6(address: [u16; 8]) -> Result<SPASourceIPAuthResultType, ()>
+{
+    Ok(SPASourceIPAuthResultType::Success)
+}
+
 async fn handle_spa(peer: SocketAddr, buff: Vec<u8>) {
-    let json_str = match String::from_utf8(buff) {
-        Ok(str) => str,
-        Err(_) => panic!("Invalid UTF-8 String")
+    let json_str = String::from_utf8(buff).expect("Invalid UTF-8 Sequence.");
+    let message: SPAMessage = match serde_json::from_str(&json_str) {
+        Ok(message) => message,
+        Err(e) => panic!("Error while deserializing buffer: {}", e.to_string())
     };
-    let message: SPAMessage = serde_json::from_str(&json_str).unwrap();
+
+    // TODO: Check peer ip and message ip is identical
+    //       If peer ip == message ip then continue authorization
+    //       Else ... peer ip is not authorized --> FAIL
+
+    let ip_address_auth_result = match message.source {
+        SPASourceIPType::V4(a, b, c, d) => 
+            authorize_ipv4([a, b, c, d]).await.unwrap(),
+        SPASourceIPType::V6(a, b, c, d, e, f, g, h) => 
+            authorize_ipv6([a, b, c, d, e, f, g, h]).await.unwrap(),
+        SPASourceIPType::Unknown => panic!("Error while deserializing message::source")
+    };
+
+    if ip_address_auth_result == SPASourceIPAuthResultType::Success ||
+       ip_address_auth_result == SPASourceIPAuthResultType::ProxiedSuccess {
+        
+    } else if ip_address_auth_result == SPASourceIPAuthResultType::Failed {
+        
+    } else {
+        unreachable!()
+    }
+
 
     println!("{:?}", message);
 }
@@ -114,7 +160,31 @@ async fn wait_for_spa(socket: UdpSocket) {
     }
 }
 
+async fn accept_socket_authorize() {
+
+}
+
+async fn accept_socket_establish_tls() {
+
+}
+
+async fn do_tls_flow() {
+    
+}
+
+async fn terminate_socket_tls() {
+
+}
+
 async fn accept_socket(mut socket: TcpStream) {
     let mut buff = [0x00 as u8; BUF_SIZE];
+    let peer = match socket.peer_addr() {
+        Ok(addr) => addr,
+        Err(e) => panic!("Failed to acquire peer address: {}", e)
+    };
     
+    // TODO: check peer is authorized with spa before request tcp connection
+
+    // TODO: establish TLS connection
+
 }
